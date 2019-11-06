@@ -16,9 +16,38 @@ __author__ = 'Henry'
 import requests, time, hashlib, urllib.request, re, json
 from moviepy.editor import *
 import os, sys, threading
-
+import signal
 import imageio
 imageio.plugins.ffmpeg.download()
+
+# 线程信号量, 限制并发数
+S = threading.Semaphore(5)
+
+# 正在下载的视频
+currentPage = []
+
+# 清屏函数
+def Clear():
+    Hide()
+    print('\033[2J', end='')
+
+# 显示光标
+def Show():
+    print('\033[?25h', end='')
+
+# 隐藏光标
+def Hide():
+    print('\033[?25l', end='')
+
+# 移动到位置,且清除这一行
+def POS(x=0,y=0):
+    print('\033[{};{}H\033[K'.format(y,x), end='')
+
+def signal_handler(signal,frame):
+    Show()
+    sys.exit(0)
+ 
+signal.signal(signal.SIGINT,signal_handler)
 
 # 访问API地址
 def get_play_list(start_url, cid, quality):
@@ -51,40 +80,24 @@ def callbackfunc(blocknum, blocksize, totalsize):
 '''
 
 
-def Schedule_cmd(blocknum, blocksize, totalsize):
-    speed = (blocknum * blocksize) / (time.time() - start_time)
-    # speed_str = " Speed: %.2f" % speed
-    speed_str = " Speed: %s" % format_size(speed)
-    recv_size = blocknum * blocksize
+def Schedule_cmd(title, page):
+    start_time = time.time()
+    def Schedule(blocknum, blocksize, totalsize):
+        # 进度条打印在第几行
+        lineNum = currentPage.index(page)+1
+        POS(0, lineNum)
+        speed = (blocknum * blocksize) / (time.time() - start_time)
+        # speed_str = " Speed: %.2f" % speed
+        speed_str = " Speed: %s" % format_size(speed)
+        recv_size = blocknum * blocksize
 
-    # 设置下载进度条
-    f = sys.stdout
-    pervent = recv_size / totalsize
-    percent_str = "%.2f%%" % (pervent * 100)
-    n = round(pervent * 50)
-    s = ('#' * n).ljust(50, '-')
-    f.write(percent_str.ljust(8, ' ') + '[' + s + ']' + speed_str)
-    f.flush()
-    # time.sleep(0.1)
-    f.write('\r')
-
-
-def Schedule(blocknum, blocksize, totalsize):
-    speed = (blocknum * blocksize) / (time.time() - start_time)
-    # speed_str = " Speed: %.2f" % speed
-    speed_str = " Speed: %s" % format_size(speed)
-    recv_size = blocknum * blocksize
-
-    # 设置下载进度条
-    f = sys.stdout
-    pervent = recv_size / totalsize
-    percent_str = "%.2f%%" % (pervent * 100)
-    n = round(pervent * 50)
-    s = ('#' * n).ljust(50, '-')
-    print(percent_str.ljust(6, ' ') + '-' + speed_str)
-    f.flush()
-    time.sleep(2)
-    # print('\r')
+        # 设置下载进度条
+        percent = recv_size / totalsize
+        percent_str = "%.2f%%" % (percent * 100)
+        n = round(percent * 50)
+        s = ('#' * n).ljust(50, '-')
+        print('P{}:'.format(page) + '[' + s + ']  ' + percent_str.ljust(6, ' ') + speed_str)
+    return Schedule
 
 
 # 字节bytes转化K\M\G
@@ -108,8 +121,8 @@ def format_size(bytes):
 
 #  下载视频
 def down_video(video_list, title, start_url, page):
+    S.acquire()
     num = 1
-    print('[正在下载P{}段视频,请稍等...]:'.format(page) + title)
     currentVideoPath = os.path.join(sys.path[0], 'bilibili_video', title)  # 当前目录作为下载目录
     if not os.path.exists(currentVideoPath):
         os.makedirs(currentVideoPath)
@@ -132,11 +145,15 @@ def down_video(video_list, title, start_url, page):
         if not os.path.exists(currentVideoPath):
             os.makedirs(currentVideoPath)
         # 开始下载
+        reporthook = Schedule_cmd(title, page)
+        currentPage.append(page)
         if len(video_list) > 1:
-            urllib.request.urlretrieve(url=i, filename=os.path.join(currentVideoPath, r'{}-{}.flv'.format(title, num)),reporthook=Schedule_cmd)  # 写成mp4也行  title + '-' + num + '.flv'
+            urllib.request.urlretrieve(url=i, filename=os.path.join(currentVideoPath, r'{}-{}.flv'.format(title, num)),reporthook=reporthook)  # 写成mp4也行  title + '-' + num + '.flv'
         else:
-            urllib.request.urlretrieve(url=i, filename=os.path.join(currentVideoPath, r'{}.flv'.format(title)),reporthook=Schedule_cmd)  # 写成mp4也行  title + '-' + num + '.flv'
+            urllib.request.urlretrieve(url=i, filename=os.path.join(currentVideoPath, r'{}.flv'.format(title)),reporthook=reporthook)  # 写成mp4也行  title + '-' + num + '.flv'
+        currentPage.remove(page)
         num += 1
+    S.release()
 
 # 合并视频(20190802新版)
 def combine_video(title_list):
@@ -203,30 +220,32 @@ if __name__ == '__main__':
     # 创建线程池
     threadpool = []
     title_list = []
-    for item in cid_list:
+    Hide()
+    for i, item in enumerate(cid_list):
         cid = str(item['cid'])
         title = item['part']
         title = re.sub(r'[\/\\:*?"<>|]', '', title)  # 替换为空的
-        print('[下载视频的cid]:' + cid)
-        print('[下载视频的标题]:' + title)
+        # s是进度条
+        s = ('#' * round(i/len(cid_list)*50)).ljust(50, '-')
+        print('加载视频cid:[{}] {}/{}\r'.format(s,i,len(cid_list)), end='')
         title_list.append(title)
         page = str(item['page'])
         start_url = start_url + "/?p=" + page
         video_list = get_play_list(start_url, cid, quality)
-        start_time = time.time()
         # down_video(video_list, title, start_url, page)
         # 定义线程
         th = threading.Thread(target=down_video, args=(video_list, title, start_url, page))
         # 将线程加入线程池
         threadpool.append(th)
         
+    Clear()
     # 开始线程
     for th in threadpool:
         th.start()
     # 等待所有线程运行完毕
     for th in threadpool:
         th.join()
-    
+    Show()
     # 最后合并视频
     print(title_list)
     combine_video(title_list)

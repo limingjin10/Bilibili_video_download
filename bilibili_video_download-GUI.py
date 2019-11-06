@@ -1,22 +1,34 @@
 # !/usr/bin/python
 # -*- coding:utf-8 -*-
-# time: 2019/04/17--08:12
+# time: 2019/07/02--08:12
 __author__ = 'Henry'
 
 
 '''
-项目: B站视频下载
-
+项目: B站视频下载 - GUI版本
 版本1: 加密API版,不需要加入cookie,直接即可下载1080p视频
-
 20190422 - 增加多P视频单独下载其中一集的功能
+20190702 - 增加视频多线程下载 速度大幅提升
+20190711 - 增加GUI版本,可视化界面,操作更加友好
 '''
-import imageio
-imageio.plugins.ffmpeg.download()
 
 import requests, time, hashlib, urllib.request, re, json
+import imageio
+imageio.plugins.ffmpeg.download()
 from moviepy.editor import *
-import os, sys
+import os, sys, threading
+
+
+
+from tkinter import *
+from tkinter import ttk
+from tkinter import StringVar
+root=Tk()
+start_time = time.time()
+
+# 将输出重定向到表格
+def print(theText):
+    msgbox.insert(END,theText+'\n')
 
 
 # 访问API地址
@@ -57,15 +69,12 @@ def Schedule_cmd(blocknum, blocksize, totalsize):
     recv_size = blocknum * blocksize
 
     # 设置下载进度条
-    f = sys.stdout
     pervent = recv_size / totalsize
     percent_str = "%.2f%%" % (pervent * 100)
-    n = round(pervent * 50)
-    s = ('#' * n).ljust(50, '-')
-    f.write(percent_str.ljust(8, ' ') + '[' + s + ']' + speed_str)
-    f.flush()
-    # time.sleep(0.1)
-    f.write('\r')
+    download.coords(fill_line1,(0,0,pervent*465,23))
+    root.update()
+    pct.set(percent_str)
+
 
 
 def Schedule(blocknum, blocksize, totalsize):
@@ -135,43 +144,46 @@ def down_video(video_list, title, start_url, page):
             urllib.request.urlretrieve(url=i, filename=os.path.join(currentVideoPath, r'{}.flv'.format(title)),reporthook=Schedule_cmd)  # 写成mp4也行  title + '-' + num + '.flv'
         num += 1
 
-# 合并视频
-def combine_video(video_list, title):
-    currentVideoPath = os.path.join(sys.path[0], 'bilibili_video', title)  # 当前目录作为下载目录
-    if not os.path.exists(currentVideoPath):
-        os.makedirs(currentVideoPath)
-    if len(video_list) >= 2:
-        # 视频大于一段才要合并
-        print('[下载完成,正在合并视频...]:' + title)
-        # 定义一个数组
-        L = []
-        # 访问 video 文件夹 (假设视频都放在这里面)
-        root_dir = currentVideoPath
-        # 遍历所有文件
-        for file in sorted(os.listdir(root_dir), key=lambda x: int(x[x.rindex("-") + 1:x.rindex(".")])):
-            # 如果后缀名为 .mp4/.flv
-            if os.path.splitext(file)[1] == '.flv':
-                # 拼接成完整路径
-                filePath = os.path.join(root_dir, file)
-                # 载入视频
-                video = VideoFileClip(filePath)
-                # 添加到数组
-                L.append(video)
-        # 拼接视频
-        final_clip = concatenate_videoclips(L)
-        # 生成目标视频文件
-        final_clip.to_videofile(os.path.join(root_dir, r'{}.mp4'.format(title)), fps=24, remove_temp=False)
-        print('[视频合并完成]' + title)
+# 合并视频(20190802新版)
+def combine_video(title_list):
+    video_path = os.path.join(sys.path[0], 'bilibili_video')  # 下载目录
+    for title in title_list:
+        current_video_path = os.path.join(video_path ,title)
+        if len(os.listdir(current_video_path)) >= 2:
+            # 视频大于一段才要合并
+            print('[下载完成,正在合并视频...]:' + title)
+            # 定义一个数组
+            L = []
+            # 遍历所有文件
+            for file in sorted(os.listdir(current_video_path), key=lambda x: int(x[x.rindex("-") + 1:x.rindex(".")])):
+                # 如果后缀名为 .mp4/.flv
+                if os.path.splitext(file)[1] == '.flv':
+                    # 拼接成完整路径
+                    filePath = os.path.join(current_video_path, file)
+                    # 载入视频
+                    video = VideoFileClip(filePath)
+                    # 添加到数组
+                    L.append(video)
+            # 拼接视频
+            final_clip = concatenate_videoclips(L)
+            # 生成目标视频文件
+            final_clip.to_videofile(os.path.join(current_video_path, r'{}.mp4'.format(title)), fps=24, remove_temp=False)
+            print('[视频合并完成]' + title)
+        else:
+            # 视频只有一段则直接打印下载完成
+            print('[视频合并完成]:' + title)
 
-    else:
-        # 视频只有一段则直接打印下载完成
-        print('[视频合并完成]:' + title)
-
-
-if __name__ == '__main__':
+def do_prepare(inputStart,inputQuality):
+    # 清空进度条
+    download.coords(fill_line1,(0,0,0,23))
+    pct.set('0.00%')
+    root.update()
+    # 清空文本栏
+    msgbox.delete('1.0','end')
+    start_time = time.time()
     # 用户输入av号或者视频链接地址
     print('*' * 30 + 'B站视频下载小助手' + '*' * 30)
-    start = input('请输入您要下载的B站av号或者视频链接地址:')
+    start = inputStart
     if start.isdigit() == True:  # 如果输入的是av号
         # 获取cid的api, 传入aid即可
         start_url = 'https://api.bilibili.com/x/web-interface/view?aid=' + start
@@ -183,14 +195,13 @@ if __name__ == '__main__':
     # <accept_format><![CDATA[flv,flv720,flv480,flv360]]></accept_format>
     # <accept_description><![CDATA[高清 1080P,高清 720P,清晰 480P,流畅 360P]]></accept_description>
     # <accept_quality><![CDATA[80,64,32,16]]></accept_quality>
-    quality = input('请输入您要下载视频的清晰度(1080p:80;720p:64;480p:32;360p:16)(填写80或64或32或16):')
+    quality = inputQuality
     # 获取视频的cid,title
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36'
     }
     html = requests.get(start_url, headers=headers).json()
     data = html['data']
-    video_title=data["title"].replace(" ","_")
     cid_list = []
     if '?p=' in start:
         # 单独下载分P视频中的一集
@@ -200,20 +211,38 @@ if __name__ == '__main__':
         # 如果p不存在就是全集下载
         cid_list = data['pages']
     # print(cid_list)
+    # 创建线程池
+    threadpool = []
+    title_list = []
     for item in cid_list:
         cid = str(item['cid'])
         title = item['part']
-        if not title:
-            title = video_title
         title = re.sub(r'[\/\\:*?"<>|]', '', title)  # 替换为空的
         print('[下载视频的cid]:' + cid)
         print('[下载视频的标题]:' + title)
+        title_list.append(title)
         page = str(item['page'])
         start_url = start_url + "/?p=" + page
         video_list = get_play_list(start_url, cid, quality)
         start_time = time.time()
-        down_video(video_list, title, start_url, page)
-        combine_video(video_list, title)
+        # down_video(video_list, title, start_url, page)
+        # 定义线程
+        th = threading.Thread(target=down_video, args=(video_list, title, start_url, page))
+        # 将线程加入线程池
+        threadpool.append(th)
+
+    # 开始线程
+    for th in threadpool:
+        th.start()
+    # 等待所有线程运行完毕
+    for th in threadpool:
+        th.join()
+    
+    # 最后合并视频
+    combine_video(title_list)
+
+    end_time = time.time()  # 结束时间
+    print('下载总耗时%.2f秒,约%.2f分钟' % (end_time - start_time, int(end_time - start_time) / 60))
 
     # 如果是windows系统，下载完成后打开下载目录
     currentVideoPath = os.path.join(sys.path[0], 'bilibili_video')  # 当前目录作为下载目录
@@ -221,4 +250,61 @@ if __name__ == '__main__':
         os.startfile(currentVideoPath)
 
 
-# 分P视频下载测试: https://www.bilibili.com/video/av19516333/
+
+def thread_it(func, *args):
+    '''将函数打包进线程'''
+    # 创建
+    t = threading.Thread(target=func, args=args) 
+    # 守护 !!!
+    t.setDaemon(True) 
+    # 启动
+    t.start()
+
+
+if __name__ == "__main__":
+    # 设置标题
+    root.title('B站视频下载小助手-GUI')
+    # 设置ico
+    root.iconbitmap('./Pic/favicon.ico')
+    # 设置Logo
+    photo = PhotoImage(file='./Pic/logo.png')
+    logo = Label(root,image=photo)
+    logo.pack()
+    # 各项输入栏和选择框
+    inputStart = Entry(root,bd=4,width=600)
+    labelStart=Label(root,text="请输入您要下载的B站av号或者视频链接地址:") # 地址输入
+    labelStart.pack(anchor="w")
+    inputStart.pack()
+    labelQual = Label(root,text="请选择您要下载视频的清晰度") # 清晰度选择
+    labelQual.pack(anchor="w")
+    inputQual = ttk.Combobox(root,state="readonly")
+    # 可供选择的表
+    inputQual['value']=('1080P','720p','480p','360p')
+    # 对应的转换字典
+    keyTrans=dict()
+    keyTrans['1080P']='80'
+    keyTrans['720p']='64'
+    keyTrans['480p']='32'
+    keyTrans['360p']='16'
+    # 初始值为720p
+    inputQual.current(1)
+    inputQual.pack()
+    confirm = Button(root,text="开始下载",command=lambda:thread_it(do_prepare,inputStart.get(), keyTrans[inputQual.get()] ))
+    msgbox = Text(root)
+    msgbox.insert('1.0',"对于单P视频:直接传入B站av号或者视频链接地址\n(eg: 49842011或者https://www.bilibili.com/video/av49842011)\n对于多P视频:\n1.下载全集:直接传入B站av号或者视频链接地址\n(eg: 49842011或者https://www.bilibili.com/video/av49842011)\n2.下载其中一集:传入那一集的视频链接地址\n(eg: https://www.bilibili.com/video/av19516333/?p=2)")
+    msgbox.pack()
+    download=Canvas(root,width=465,height=23,bg="white")
+    # 进度条的设置
+    labelDownload=Label(root,text="下载进度")
+    labelDownload.pack(anchor="w")
+    download.pack()
+    fill_line1 = download.create_rectangle(0, 0, 0, 23, width=0, fill="green")
+    pct=StringVar()
+    pct.set('0.0%')
+    pctLabel = Label(root,textvariable=pct)
+    pctLabel.pack()
+    root.geometry("600x800")
+    confirm.pack()
+    # GUI主循环
+    root.mainloop()
+    
